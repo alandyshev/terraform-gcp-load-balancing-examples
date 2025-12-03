@@ -1,6 +1,13 @@
-module "network" {
-  source = "../../modules/network"
+module "vpc" {
+  source = "../../modules/vpc"
 
+  vpc_name = local.vpc_name
+}
+
+module "regional_network" {
+  source = "../../modules/regional_network"
+
+  vpc_id   = module.vpc.vpc_id
   vpc_name = local.vpc_name
   region   = var.region
 
@@ -10,6 +17,8 @@ module "network" {
 
   backend_port  = local.backend_port
   frontend_port = local.frontend_port
+
+  depends_on = [module.vpc]
 }
 
 module "backend_service" {
@@ -18,8 +27,8 @@ module "backend_service" {
   service_name   = "backend"
   instance_names = ["backend-1", "backend-2"]
 
-  vpc_id    = module.network.vpc_id
-  subnet_id = module.network.backend_subnet_id
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.regional_network.backend_subnet_id
   zone      = var.zone
 
   machine_type = local.machine_type
@@ -32,7 +41,7 @@ module "backend_service" {
   repo_url   = local.repo_url
   app_subdir = local.app_subdir
 
-  depends_on = [module.network]
+  depends_on = [module.regional_network]
 }
 
 module "frontend_service" {
@@ -41,8 +50,8 @@ module "frontend_service" {
   service_name   = "frontend"
   instance_names = ["frontend-1", "frontend-2"]
 
-  vpc_id    = module.network.vpc_id
-  subnet_id = module.network.frontend_subnet_id
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.regional_network.frontend_subnet_id
   zone      = var.zone
 
   machine_type = local.machine_type
@@ -58,7 +67,7 @@ module "frontend_service" {
   # Frontend calls backend via the internal load balancer
   backend_url = "http://${local.internal_lb_ip}:${local.backend_port}/info"
 
-  depends_on = [module.network]
+  depends_on = [module.regional_network]
 }
 
 # Internal L4 LB for backend
@@ -66,15 +75,15 @@ module "internal_lb" {
   source = "../../modules/internal_lb"
 
   region = var.region
-  vpc_id = module.network.vpc_id
+  vpc_id = module.vpc.vpc_id
 
-  subnet_id              = module.network.backend_subnet_id
+  subnet_id              = module.regional_network.backend_subnet_id
   backend_instance_group = module.backend_service.instance_group_self_link
 
   internal_lb_ip = local.internal_lb_ip
   port           = local.backend_port
 
-  depends_on = [module.network, module.backend_service]
+  depends_on = [module.backend_service]
 }
 
 # External L7 LB for frontend
@@ -82,21 +91,21 @@ module "external_lb" {
   source = "../../modules/external_lb"
 
   region = var.region
-  vpc_id = module.network.vpc_id
+  vpc_id = module.vpc.vpc_id
 
   external_lb_proxy_subnet_cidr = local.external_lb_proxy_subnet_cidr
   port                          = local.frontend_port
 
   frontend_instance_group = module.frontend_service.instance_group_self_link
 
-  depends_on = [module.network, module.frontend_service]
+  depends_on = [module.frontend_service]
 }
 
 # Debug firewall rules (SSH + ICMP). For demo only.
 module "debug_firewall" {
   source = "../../modules/debug_firewall"
 
-  vpc_id   = module.network.vpc_id
+  vpc_id   = module.vpc.vpc_id
   vpc_name = local.vpc_name
 
   # For now we use defaults (0.0.0.0/0) for demo.
@@ -104,5 +113,5 @@ module "debug_firewall" {
   # ssh_source_ranges  = ["203.0.113.0/24"]
   # icmp_source_ranges = ["203.0.113.0/24"]
 
-  depends_on = [module.network]
+  depends_on = [module.vpc]
 }

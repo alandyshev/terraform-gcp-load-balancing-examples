@@ -1,5 +1,11 @@
+variable "vpc_id" {
+  description = "ID (self link) of the VPC where regional resources will be created"
+  type        = string
+}
+
 variable "vpc_name" {
-  type = string
+  description = "Name of the VPC (used as a prefix for regional resource names)"
+  type        = string
 }
 
 variable "region" {
@@ -15,7 +21,8 @@ variable "frontend_subnet_cidr" {
 }
 
 variable "external_lb_proxy_subnet_cidr" {
-  type = string
+  description = "CIDR block used by the external LB proxy-only subnet (or 0.0.0.0/0 in Scenario 3)"
+  type        = string
 }
 
 variable "backend_port" {
@@ -28,6 +35,12 @@ variable "frontend_port" {
   type        = number
 }
 
+variable "name_suffix" {
+  description = "Short suffix to distinguish regional resources (e.g. us / eu). Empty for single-region scenarios."
+  type        = string
+  default     = ""
+}
+
 locals {
   // Google load balancer / health check ranges
   // Ref: https://cloud.google.com/load-balancing/docs/firewall-rules
@@ -35,33 +48,30 @@ locals {
     "35.191.0.0/16",
     "130.211.0.0/22",
   ]
-}
 
-resource "google_compute_network" "vpc" {
-  name                    = var.vpc_name
-  auto_create_subnetworks = false
+  // Region-specific tags, but keep plain names when suffix is empty
+  backend_tag  = var.name_suffix == "" ? "backend" : "backend-${var.name_suffix}"
+  frontend_tag = var.name_suffix == "" ? "frontend" : "frontend-${var.name_suffix}"
 }
 
 resource "google_compute_subnetwork" "backend" {
-  name          = "${var.vpc_name}-sub-backend"
+  name          = "${var.vpc_name}-${var.name_suffix}-sub-backend"
   ip_cidr_range = var.backend_subnet_cidr
   region        = var.region
-  network       = google_compute_network.vpc.id
+  network       = var.vpc_id
 }
 
 resource "google_compute_subnetwork" "frontend" {
-  name          = "${var.vpc_name}-sub-frontend"
+  name          = "${var.vpc_name}-${var.name_suffix}-sub-frontend"
   ip_cidr_range = var.frontend_subnet_cidr
   region        = var.region
-  network       = google_compute_network.vpc.id
+  network       = var.vpc_id
 }
 
-// The NAT resource lets VMs with no public IP access Internet
-// The NAT resource requires a router to be created in the VPC.
 resource "google_compute_router" "nat_router" {
-  name    = "${var.vpc_name}-router"
+  name    = "${var.vpc_name}-${var.name_suffix}-router"
   region  = var.region
-  network = google_compute_network.vpc.id
+  network = var.vpc_id
 
   bgp {
     asn = 64514
@@ -69,7 +79,7 @@ resource "google_compute_router" "nat_router" {
 }
 
 resource "google_compute_router_nat" "nat" {
-  name   = "${var.vpc_name}-nat"
+  name   = "${var.vpc_name}-${var.name_suffix}-nat"
   region = var.region
   router = google_compute_router.nat_router.name
 
@@ -77,10 +87,10 @@ resource "google_compute_router_nat" "nat" {
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
 }
 
-// Backend app port – frontend subnet + health checks → backend instances
+// Backend app port – frontend subnet + health checks → backend instances (region-scoped)
 resource "google_compute_firewall" "backend_app" {
-  name    = "${var.vpc_name}-backend-allow-app"
-  network = google_compute_network.vpc.id
+  name    = "${var.vpc_name}-${var.name_suffix}-backend-allow-app"
+  network = var.vpc_id
 
   direction = "INGRESS"
   priority  = 1000
@@ -90,7 +100,8 @@ resource "google_compute_firewall" "backend_app" {
     local.health_check_ranges,
   )
 
-  target_tags = ["backend"]
+  # Region-specific backend tag, or plain "backend" if no suffix
+  target_tags = [local.backend_tag]
 
   allow {
     protocol = "tcp"
@@ -98,10 +109,10 @@ resource "google_compute_firewall" "backend_app" {
   }
 }
 
-// Frontend app port – only from external HTTP(S) LB proxies → frontend instances
+// Frontend app port – from external L7 LB / internet + health checks → frontend instances (region-scoped)
 resource "google_compute_firewall" "frontend_app" {
-  name    = "${var.vpc_name}-frontend-allow-app"
-  network = google_compute_network.vpc.id
+  name    = "${var.vpc_name}-${var.name_suffix}-frontend-allow-app"
+  network = var.vpc_id
 
   direction = "INGRESS"
   priority  = 1000
@@ -113,16 +124,13 @@ resource "google_compute_firewall" "frontend_app" {
     )
   )
 
-  target_tags = ["frontend"]
+  # Region-specific frontend tag, or plain "frontend" if no suffix
+  target_tags = [local.frontend_tag]
 
   allow {
     protocol = "tcp"
     ports    = [tostring(var.frontend_port)]
   }
-}
-
-output "vpc_id" {
-  value = google_compute_network.vpc.id
 }
 
 output "backend_subnet_id" {

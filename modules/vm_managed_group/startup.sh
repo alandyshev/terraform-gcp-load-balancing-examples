@@ -33,8 +33,7 @@ retry() {
 log "Starting startup script at $(date)"
 
 # Retry apt in case of transient network issues
-retry 5 "apt-get update"
-retry 5 "apt-get install -y python3 python3-venv python3-pip git"
+retry 5 "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 python3-venv python3-pip git"
 
 APP_ROOT="/opt/app"
 mkdir -p "$APP_ROOT"

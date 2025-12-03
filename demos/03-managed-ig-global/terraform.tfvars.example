@@ -1,0 +1,10 @@
+project = "my-project-id"
+
+region_a = "us-central1"
+zone_a   = "us-central1-a"
+
+region_b = "europe-west1"
+zone_b   = "europe-west1-b"
+
+region_a_suffix = "us"
+region_b_suffix = "eu"

@@ -13,8 +13,14 @@ variable "external_lb_proxy_subnet_cidr" {
 }
 
 variable "port" {
-  description = "Port that frontend app listens on"
+  description = "Port that frontend app listens on inside the VMs (named port on the instance group)"
   type        = number
+}
+
+variable "listener_port" {
+  description = "External port that the regional HTTP(S) load balancer listens on (e.g. 80)"
+  type        = number
+  default     = 80
 }
 
 variable "frontend_instance_group" {
@@ -43,6 +49,7 @@ resource "google_compute_region_health_check" "frontend" {
   region = var.region
 
   http_health_check {
+    # Health check hits the app port on the VM
     port         = var.port
     request_path = "/health"
   }
@@ -98,7 +105,8 @@ resource "google_compute_forwarding_rule" "external_lb_frontend" {
   load_balancing_scheme = "EXTERNAL_MANAGED"
   ip_protocol           = "TCP"
 
-  port_range = tostring(var.port)
+  # External listener port (now 80 by default)
+  port_range = tostring(var.listener_port)
   network    = var.vpc_id
 
   ip_address = google_compute_address.external_lb.address
