@@ -1,5 +1,3 @@
-// demos/03-global-l7/variables.tf
-
 variable "project" {
   type        = string
   description = "GCP project ID where the demo resources will be deployed."

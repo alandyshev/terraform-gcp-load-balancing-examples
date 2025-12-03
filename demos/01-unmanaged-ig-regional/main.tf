@@ -101,7 +101,7 @@ module "external_lb" {
   depends_on = [module.frontend_service]
 }
 
-# Debug firewall rules (SSH + ICMP). For demo only.
+# Debug firewall rules (SSH + ICMP). For demo only – do NOT use these defaults in production.
 module "debug_firewall" {
   source = "../../modules/debug_firewall"
 

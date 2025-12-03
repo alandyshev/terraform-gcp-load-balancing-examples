@@ -1,8 +1,11 @@
-
-// Regional stack for one region:
-// - backend managed instance group
-// - frontend managed instance group
-// - internal L4 load balancer for backend
+# Regional stack for a single region:
+#
+# - Backend managed instance group
+# - Frontend managed instance group
+# - Internal L4 load balancer for the backend
+#
+# This module is used both for single-region demos and as the per-region
+# building block in the global load balancing scenario.
 
 variable "vpc_id" {
   description = "ID (self link) of the VPC where instances will be created"
