@@ -7,12 +7,16 @@ The goal of this repository is to answer a practical question:
 > “I can click together a Google Cloud load balancer in the console —  
 > but **how do I model all those forwarding rules, proxies, backends, and health checks in Terraform** in a clean, reusable way?”
 
-Google Cloud has multiple load balancer families (internal vs external, L4 vs L7, proxy vs passthrough, regional vs global), and each variant requires a slightly different set of resources wired together correctly in Terraform.   
+While GCP makes load balancers easy to configure in the Console UI, doing the same in Terraform is significantly more complex. Compared to how many teams typically use AWS or Azure, Google’s load balancers are built from more modular resources — backend services, proxies, URL maps, health checks, forwarding rules, proxy-only subnets, firewall rules, and more. Configuring them correctly often requires wiring together 5–10 separate Terraform resources per load balancer.
 
-This repo provides **working, production-like examples (with some caveats explained below)** plus **reusable Terraform modules** you can:
+Google provides some Terraform modules, but they are limited in scope, opinionated, or focused only on specific products (e.g., classic global HTTP(S) LB). For modern architectures — such as **regional external L7 load balancers** or **internal L4 passthrough load balancers** — engineers frequently end up writing their own modules or reverse-engineering examples.
 
-- copy into your own project as a starting point, or  
-- study to understand how the pieces fit together.
+This repository fills that gap by providing **clear, end-to-end, production-like examples** and **fully reusable Terraform modules** for:  
+- Internal L4 regional passthrough load balancers
+- Regional external L7 managed-proxy load balancers
+- Global external L7 HTTP load balancers
+
+Use them as a starting point for your own infrastructure, or study them to understand how all the pieces fit together.
 
 ---
 
@@ -23,22 +27,108 @@ This repo provides **working, production-like examples (with some caveats explai
 This repository contains **3 full end-to-end scenarios**, each showing a progressively more advanced architecture.
 All demos share the same modules but differ in orchestration and load‑balancer topology.
 
-1. **Scenario 1 — Unmanaged Instance Groups + Regional Load Balancing**  
-   Folder: `demos/01-unmanaged-ig-regional/`
+#### Scenario 1 — Unmanaged Instance Groups + Regional Load Balancing  
+Folder: `demos/01-unmanaged-ig-regional/`
+```txt
+                    ┌──────────────────────────────────┐
+                    │      Regional External L7 LB     │
+                    │   (EXTERNAL_MANAGED, HTTP only)  │
+                    └───────────────┬──────────────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │   Frontend VMs      │
+                         │ Unmanaged Instance  │
+                         │       Group         │
+                         └─────────┬───────────┘
+                                   │  HTTP (5500)
+                                   │
+                     ┌─────────────┴───────────────┐
+                     │  Internal L4 TCP ILB        │
+                     │   (load_balancing_scheme=   │
+                     │          "INTERNAL")        │
+                     └─────────────┬───────────────┘
+                                   │
+                                   ▼
+                         ┌─────────────────────┐
+                         │    Backend VMs      │
+                         │ Unmanaged Instance  │
+                         │        Group        │
+                         └─────────────────────┘
+```
 
-2. **Scenario 2 — Managed Instance Groups + Autoscaling + Regional Load Balancing**  
-   Folder: `demos/02-managed-ig-regional/`
+#### Scenario 2 — Managed Instance Groups + Autoscaling + Regional Load Balancing
+Folder: `demos/02-managed-ig-regional/`
+```txt
+                    ┌──────────────────────────────────┐
+                    │      Regional External L7 LB     │
+                    │   (EXTERNAL_MANAGED, HTTP only)  │
+                    └───────────────┬──────────────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────────────┐
+                         │    Frontend MIG (Managed)    │
+                         │  - Autohealing (HTTP /health)│
+                         │  - Autoscaling (CPU)         │
+                         └───────────┬──────────────────┘
+                                     │ HTTP (5500)
+                                     │
+                      ┌──────────────┴───────────────┐
+                      │   Internal L4 TCP ILB        │
+                      │ (Passthrough, regional)      │
+                      └──────────────┬───────────────┘
+                                     │
+                                     ▼
+                         ┌──────────────────────────────┐
+                         │     Backend MIG (Managed)    │
+                         │  - Autohealing (HTTP/health) │
+                         │  - Autoscaling (CPU)         │
+                         └──────────────────────────────┘
+```
+#### Scenario 3 — Global Frontend Load Balancing Across Two Regions 
+Folder: `demos/03-managed-ig-global/`
+```txt
+                           ┌─────────────────────────────────────────┐
+                           │    Global External HTTP Load Balancer   │
+                           │      (Global EXTERNAL, GFEs, HTTP)      │
+                           └─────────────────────┬───────────────────┘
+                                                 │
+       ┌─────────────────────────────────────────┼─────────────────────────────────────────┐
+       │                                         │                                         │
+       ▼                                         ▼                                         ▼
+┌─────────────────────────┐              ┌─────────────────────────┐                (Client requests
+│   Google Front End      │              │   Google Front End      │                 automatically hit
+│ (Closest geographic GFE)│              │ (Closest geographic GFE)│                 nearest GFE)
+└──────────┬──────────────┘              └──────────┬──────────────┘
+           │                                        │
+           ▼                                        ▼
 
-3. **Scenario 3 — Global Frontend Load Balancing Across Two Regions**  
-   Folder: `demos/03-managed-ig-global/`
-
+        Region A                                   Region B
+   (e.g., us-central1)                        (e.g., europe-west1)
+───────────────────────────             ───────────────────────────
+          │                                        │
+          ▼                                        ▼
+┌────────────────────────────┐         ┌────────────────────────────┐
+│     Frontend MIG (A)       │         │     Frontend MIG (B)       │
+└─────────────┬──────────────┘         └─────────────┬──────────────┘
+              │ HTTP (5500)                          │ HTTP (5500)
+              │                                      │
+        ┌─────▼──────────────────┐             ┌─────▼──────────────────┐
+        │   Internal TCP ILB (A) │             │   Internal TCP ILB (B) │
+        └─────┬──────────────────┘             └─────┬──────────────────┘
+              │                                      │
+              ▼                                      ▼
+┌────────────────────────────┐         ┌────────────────────────────┐
+│       Backend MIG (A)      │         │       Backend MIG (B)      │
+└────────────────────────────┘         └────────────────────────────┘
+```
 ---
 
-## Load Balancer Types
+### Load Balancer Types
 
 This project demonstrates **three different GCP load balancer products**, implemented exactly as recommended in Terraform. Each type requires a different set of resources (health checks, backend services, proxies, forwarding rules, subnets, etc.), and the examples show the correct, minimal wiring for each.
 
-### 1. Internal L4 Regional Passthrough Load Balancer (TCP)
+#### 1. Internal L4 Regional Passthrough Load Balancer (TCP)
 
 **GCP product name:** *Internal TCP/UDP Load Balancer*  
 **Terraform scheme:** `load_balancing_scheme = "INTERNAL"`  
@@ -51,7 +141,7 @@ Packets go directly from client to backend — the LB does **not** proxy traffic
 
 ---
 
-### 2. Regional External L7 HTTP Application Load Balancer (Proxy-Based)
+#### 2. Regional External L7 HTTP Application Load Balancer (Proxy-Based)
 
 **GCP product name:** *Regional External Application Load Balancer*  
 **Terraform scheme:** `load_balancing_scheme = "EXTERNAL_MANAGED"`  
@@ -64,7 +154,7 @@ It is the modern replacement for the legacy “HTTP(S) Load Balancer.”
 
 ---
 
-### 3. Global External L7 HTTP Load Balancer
+#### 3. Global External L7 HTTP Load Balancer
 
 **GCP product name:** *Global External Application Load Balancer (HTTP(S))*  
 **Terraform scheme:** `load_balancing_scheme = "EXTERNAL"`  
@@ -79,7 +169,7 @@ In this demo it runs HTTP on port 80, but supports full HTTPS/mTLS in production
 
 ---
 
-## Architecture Patterns
+### Architecture Patterns
 
 Each scenario models a realistic, modern multi‑tier setup:
 
@@ -95,8 +185,9 @@ Each scenario models a realistic, modern multi‑tier setup:
 - **Managed instance groups**  
   Autohealing + CPU-based autoscaling.
 
-- **Startup scripts**  
-  Retry logic, logging, repo cloning, venv setup, app startup.
+- **Startup scripts (demo only pattern)**  
+  Retry logic, logging, repo cloning from GitHub, venv setup, app startup.  
+  In production you would typically **bake the app into a custom image or container** instead of cloning the repo on every boot.
 
 The sample app:
 
@@ -134,7 +225,7 @@ See `test-app/README.md` for details.
 
 ---
 
-# Requirements
+## Requirements
 
 - Terraform **≥ 1.5**
 - A Google Cloud project with billing enabled
@@ -155,7 +246,7 @@ when done.
 
 ---
 
-# Authentication: Using a Service Account for Terraform
+## Authentication: Using a Service Account for Terraform
 
 Terraform authenticates via:
 
@@ -215,7 +306,7 @@ Terraform will now authenticate automatically.
 
 ---
 
-# Running the Demos
+## Running the Demos
 
 Each example is fully isolated.
 
@@ -224,6 +315,7 @@ cd demos/01-unmanaged-ig-regional   # Or 02, or 03
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars and set your project ID
 terraform init
+terraform plan
 terraform apply
 terraform destroy     # Cleanup
 ```
@@ -239,13 +331,14 @@ terraform destroy     # Cleanup
 
 ---
 
-# Scenario 1 — Unmanaged Instance Group
+### Scenario 1 — Unmanaged Instance Group
 
 ```
 cd demos/01-unmanaged-ig-regional
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars and set your project ID
 terraform init
+terraform plan
 terraform apply
 ```
 
@@ -262,13 +355,14 @@ curl http://<external_lb_ip>/info
 
 ---
 
-# Scenario 2 — Managed Instance Group
+### Scenario 2 — Managed Instance Group
 
 ```
 cd demos/02-managed-ig-regional
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars and set your project ID
 terraform init
+terraform plan
 terraform apply
 ```
 
@@ -279,13 +373,14 @@ Outputs (same as Scenario 1):
 
 ---
 
-# Scenario 3 — Multi‑Region Global Load Balancer
+### Scenario 3 — Multi‑Region Global Load Balancer
 
 ```
 cd demos/03-managed-ig-global
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars and set your project ID
 terraform init
+terraform plan
 terraform apply
 ```
 
@@ -314,7 +409,7 @@ curl http://<global_lb_ip>/info
 ```
 ---
 
-# Security & Production Notes
+## Security & Production Notes
 
 ### 🔐 Debug Firewall Module
 
@@ -373,12 +468,33 @@ gunicorn -b 0.0.0.0:5500 frontend:app
 
 ---
 
+### 🧱 VM Images vs. “Clone on Boot”
+
+In these demos, each VM:
+
+- clones this GitHub repo on startup,  
+- creates a Python virtual environment, and  
+- runs the Flask apps directly.
+
+This keeps the Terraform examples small and easy to understand, but it is **not** how you would normally deploy in production.
+
+For a production setup you would typically:
+
+- build a **custom VM image** or **container image** that already contains your app and dependencies, and  
+- use **instance templates** + **managed instance groups** (or a container platform like GKE/Cloud Run) to roll out new versions.
+
+See:  
+- Custom images: https://cloud.google.com/compute/docs/images  
+- Instance templates: https://cloud.google.com/compute/docs/instance-templates
+
+---
+
 ### 🔑 IAM Caution
 
 Service account roles are powerful — store the key securely and rotate regularly.
 
 ---
 
-# License
+## License
 
 MIT — see `LICENSE` for details.
